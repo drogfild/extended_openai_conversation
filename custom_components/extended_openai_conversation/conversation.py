@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Literal
 
 from openai._exceptions import OpenAIError
@@ -60,6 +61,7 @@ from .const import (
     DEFAULT_USE_TOOLS,
     DOMAIN,
     EVENT_CONVERSATION_FINISHED,
+    MODEL_PARAMETER_SUPPORT,
 )
 from .exceptions import (
     FunctionLoadFailed,
@@ -68,7 +70,7 @@ from .exceptions import (
     ParseArgumentsFailed,
     TokenLengthExceededError,
 )
-from .helpers import get_function_executor
+from .helpers import get_function_executor, get_token_param_for_model
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -366,19 +368,21 @@ class ExtendedOpenAIAgentEntity(
         # Determine which token parameter to use based on model
         # Newer models (gpt-4o, gpt-5, o1, o3, etc.) require max_completion_tokens
         model_lower = model.lower()
-        use_new_token_param = any(
-            model_lower.startswith(prefix) or f"-{prefix}" in model_lower
-            for prefix in ("gpt-4o", "gpt-5", "o1", "o3", "o4")
-        )
-        token_kwargs = {"max_completion_tokens": max_tokens} if use_new_token_param else {"max_tokens": max_tokens}
+        token_kwargs = {get_token_param_for_model(model): max_tokens}
+        supports_top_p = True
+        for entry in MODEL_PARAMETER_SUPPORT:
+            if re.search(entry["pattern"], model_lower):
+                supports_top_p = "top_p" not in entry["unsupported_params"]
+                break
+        top_p_kwargs = {"top_p": top_p} if supports_top_p else {}
 
         response = await self.client.chat.completions.create(
             model=model,
             messages=messages,
-            top_p=top_p,
             temperature=temperature,
             user=user_input.conversation_id,
             **token_kwargs,
+            **top_p_kwargs,
             **tool_kwargs,
         )
 
